@@ -1,5 +1,5 @@
 import type { Context } from 'hono';
-import { push } from './apns';
+import { push, regenerateAuthToken } from './apns';
 import type { DBAdapter, Options } from './type';
 import { getTimestamp, newShortUUID } from './utils';
 
@@ -262,19 +262,38 @@ export class API {
       headers['apns-collapse-id'] = parameters.id;
     }
 
+    const handleResponse = async (
+      resp: Awaited<ReturnType<typeof push>>,
+      retryCount = 0,
+    ) => {
+      if (resp.status === 200) {
+        return buildSuccess(undefined);
+      }
+      if (
+        response.status === 410 ||
+        (response.status === 400 && response.message.includes('BadDeviceToken'))
+      ) {
+        await this.db.deleteDeviceByKey(deviceKey);
+      }
+
+      if (
+        retryCount === 0 &&
+        response.status === 403 &&
+        response.message.includes('ExpiredProviderToken')
+      ) {
+        // Token expired, try again
+        await regenerateAuthToken(this.db);
+        return handleResponse(
+          await push(this.options, deviceToken, headers, aps, ctx),
+          retryCount + 1,
+        );
+      }
+
+      throw new APIError(response.status, `push failed: ${response.message}`);
+    };
+
     const response = await push(this.options, deviceToken, headers, aps, ctx);
 
-    if (response.status === 200) {
-      return buildSuccess(undefined);
-    }
-
-    if (
-      response.status === 410 ||
-      (response.status === 400 && response.message.includes('BadDeviceToken'))
-    ) {
-      await this.db.saveDeviceTokenByKey(deviceKey, '');
-    }
-
-    throw new APIError(response.status, `push failed: ${response.message}`);
+    return await handleResponse(response);
   }
 }

@@ -4,6 +4,7 @@ import { base64ToArrayBuffer, getTimestamp } from './utils';
 
 const TOPIC = 'me.fin.bark';
 export const APNS_HOST_NAME = 'api.push.apple.com';
+const TOKEN_EXPIRE_TIME = 3000000; // 有效期是一小时，向下取一点
 const generateAuthToken = async () => {
   const TOKEN_KEY = `-----BEGIN PRIVATE KEY-----
   MIGTAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBHkwdwIBAQQg4vtC3g5L5HgKGJ2+
@@ -56,6 +57,11 @@ const generateAuthToken = async () => {
 };
 
 let authToken: string | NullLike = null;
+export const regenerateAuthToken = async (db: DBAdapter) => {
+  authToken = await generateAuthToken();
+  await db.saveAuthorizationToken(authToken, TOKEN_EXPIRE_TIME);
+  return authToken;
+};
 const getAuthToken = async (db: DBAdapter) => {
   if (authToken) {
     return authToken;
@@ -65,9 +71,7 @@ const getAuthToken = async (db: DBAdapter) => {
     return authToken;
   }
 
-  authToken = await generateAuthToken();
-  await db.saveAuthorizationToken(authToken, 3000000); // 有效期是一小时，向下取一点
-  return authToken;
+  return await regenerateAuthToken(db);
 };
 
 export const requestAPNs = async (
