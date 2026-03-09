@@ -1,9 +1,6 @@
-import { afterEach, beforeEach, expect, test } from '@rstest/core';
-import { fetchAppIconFromAppStore, isUrl } from '../src/core/api';
-import {
-  ICON_FALLBACK_MAP,
-  lookupIconFromFallbackMap,
-} from '../src/core/icon-fallback-map';
+import { expect, test } from '@rstest/core';
+import { isUrl } from '../src/core/api';
+import { ICON_MAP, lookupIcon } from '../src/core/icon-map';
 
 // ---------------------------------------------------------------------------
 // isUrl
@@ -27,195 +24,47 @@ test('isUrl returns false for plain app names and non-URL strings', () => {
 });
 
 // ---------------------------------------------------------------------------
-// fetchAppIconFromAppStore – mocked fetch
+// lookupIcon
 // ---------------------------------------------------------------------------
 
-const originalFetch = globalThis.fetch;
-
-beforeEach(() => {
-  // reset to real fetch before each test; individual tests override as needed
-  globalThis.fetch = originalFetch;
+test('lookupIcon returns icon URL for a known bundle identifier', () => {
+  const result = lookupIcon('ph.nicegram.Telegram');
+  expect(result).toBe(ICON_MAP['ph.nicegram.Telegram']);
 });
 
-afterEach(() => {
-  globalThis.fetch = originalFetch;
+test('lookupIcon returns icon URL for WeChat bundle identifier', () => {
+  const result = lookupIcon('com.tencent.xin');
+  expect(result).toBe(ICON_MAP['com.tencent.xin']);
 });
 
-function makeAppStoreResponse(results: object[]) {
-  return Promise.resolve(
-    new Response(JSON.stringify({ results }), { status: 200 }),
-  );
-}
+test('lookupIcon returns undefined for unknown bundle identifier', () => {
+  expect(lookupIcon('com.unknown.app')).toBeUndefined();
+});
 
-const MOCK_APP = {
-  trackId: 123,
-  trackName: 'Telegram Messenger',
-  artworkUrl512: 'https://example.com/telegram-512.png',
-  artworkUrl100: 'https://example.com/telegram-100.png',
-};
+test('lookupIcon uses exact match (case-sensitive)', () => {
+  // Bundle identifiers are case-sensitive; wrong case should return undefined
+  expect(lookupIcon('PH.NICEGRAM.TELEGRAM')).toBeUndefined();
+  expect(lookupIcon('com.tencent.XIN')).toBeUndefined();
+});
+
+// ---------------------------------------------------------------------------
+// ICON_MAP URL validity
+// ---------------------------------------------------------------------------
+
+test('ICON_MAP contains only http/https icon URLs', () => {
+  for (const [bundleId, url] of Object.entries(ICON_MAP)) {
+    expect(isUrl(url), `entry "${bundleId}" should have a valid URL`).toBe(
+      true,
+    );
+  }
+});
+
+// ---------------------------------------------------------------------------
+// icon URL direct pass-through (isUrl check used in pushOne)
+// ---------------------------------------------------------------------------
 
 test('icon URL is identified by isUrl and would be used directly in pushOne', () => {
-  // pushOne calls isUrl before fetchAppIconFromAppStore; if isUrl returns true
-  // the fetch helper is skipped entirely.
+  // pushOne calls isUrl; if it returns true the map lookup is skipped entirely.
   expect(isUrl('https://example.com/my-icon.png')).toBe(true);
-  expect(isUrl('Telegram')).toBe(false); // app name triggers lookup
-});
-
-test('fetchAppIconFromAppStore returns artworkUrl512 for exact match', async () => {
-  globalThis.fetch = () => makeAppStoreResponse([MOCK_APP]);
-
-  const result = await fetchAppIconFromAppStore('Telegram Messenger');
-  expect(result).toBe('https://example.com/telegram-512.png');
-});
-
-test('fetchAppIconFromAppStore returns artworkUrl100 when artworkUrl512 absent', async () => {
-  const app = { ...MOCK_APP, artworkUrl512: undefined };
-  globalThis.fetch = () => makeAppStoreResponse([app]);
-
-  const result = await fetchAppIconFromAppStore('Telegram Messenger');
-  expect(result).toBe('https://example.com/telegram-100.png');
-});
-
-test('fetchAppIconFromAppStore prefers exact name match over prefix match', async () => {
-  const exact = {
-    trackId: 1,
-    trackName: 'WeChat',
-    artworkUrl512: 'https://example.com/wechat-exact.png',
-  };
-  const prefix = {
-    trackId: 2,
-    trackName: 'WeChat Mini Programs',
-    artworkUrl512: 'https://example.com/wechat-prefix.png',
-  };
-  // Return prefix match first to test sorting
-  globalThis.fetch = () => makeAppStoreResponse([prefix, exact]);
-
-  const result = await fetchAppIconFromAppStore('WeChat');
-  expect(result).toBe('https://example.com/wechat-exact.png');
-});
-
-test('fetchAppIconFromAppStore deduplicates results across regions', async () => {
-  let callCount = 0;
-  globalThis.fetch = () => {
-    callCount++;
-    return makeAppStoreResponse([MOCK_APP]); // same trackId every region
-  };
-
-  const result = await fetchAppIconFromAppStore('Telegram Messenger');
-  // All 5 regions queried
-  expect(callCount).toBe(5);
-  // But only one unique candidate (deduped by trackId)
-  expect(result).toBe('https://example.com/telegram-512.png');
-});
-
-test('fetchAppIconFromAppStore returns undefined when no results match', async () => {
-  globalThis.fetch = () =>
-    makeAppStoreResponse([
-      {
-        trackId: 99,
-        trackName: 'SomeOtherApp',
-        artworkUrl512: 'https://example.com/other.png',
-      },
-    ]);
-
-  const result = await fetchAppIconFromAppStore('WeChat');
-  expect(result).toBeUndefined();
-});
-
-test('fetchAppIconFromAppStore returns undefined when all regions fail', async () => {
-  globalThis.fetch = () => Promise.reject(new Error('network error'));
-
-  const result = await fetchAppIconFromAppStore('WeChat');
-  expect(result).toBeUndefined();
-});
-
-test('fetchAppIconFromAppStore returns undefined when API returns non-ok status', async () => {
-  globalThis.fetch = () =>
-    Promise.resolve(new Response('Server Error', { status: 500 }));
-
-  const result = await fetchAppIconFromAppStore('WeChat');
-  expect(result).toBeUndefined();
-});
-
-test('fetchAppIconFromAppStore handles mixed region success and failure', async () => {
-  let calls = 0;
-  globalThis.fetch = () => {
-    calls++;
-    if (calls <= 2) return Promise.reject(new Error('timeout'));
-    return makeAppStoreResponse([MOCK_APP]);
-  };
-
-  const result = await fetchAppIconFromAppStore('Telegram Messenger');
-  expect(result).toBe('https://example.com/telegram-512.png');
-});
-
-test('fetchAppIconFromAppStore returns undefined for empty app name', async () => {
-  let called = false;
-  globalThis.fetch = () => {
-    called = true;
-    return makeAppStoreResponse([]);
-  };
-  const result = await fetchAppIconFromAppStore('  ');
-  expect(result).toBeUndefined();
-  expect(called).toBe(false); // no network call made
-});
-
-test('fetchAppIconFromAppStore uses case-insensitive normalized match', async () => {
-  const app = {
-    trackId: 42,
-    trackName: 'telegram messenger',
-    artworkUrl512: 'https://example.com/tg.png',
-  };
-  globalThis.fetch = () => makeAppStoreResponse([app]);
-
-  const result = await fetchAppIconFromAppStore('Telegram Messenger');
-  expect(result).toBe('https://example.com/tg.png');
-});
-
-// ---------------------------------------------------------------------------
-// lookupIconFromFallbackMap
-// ---------------------------------------------------------------------------
-
-test('lookupIconFromFallbackMap returns icon URL for a known app name', () => {
-  const result = lookupIconFromFallbackMap('Telegram');
-  expect(result).toBe(ICON_FALLBACK_MAP['telegram']);
-});
-
-test('lookupIconFromFallbackMap is case-insensitive', () => {
-  expect(lookupIconFromFallbackMap('TELEGRAM')).toBe(
-    ICON_FALLBACK_MAP['telegram'],
-  );
-  expect(lookupIconFromFallbackMap('WeChat')).toBe(ICON_FALLBACK_MAP['wechat']);
-});
-
-test('lookupIconFromFallbackMap returns undefined for unknown app name', () => {
-  expect(lookupIconFromFallbackMap('SomeUnknownApp')).toBeUndefined();
-});
-
-test('lookupIconFromFallbackMap handles multi-word names with normalization', () => {
-  expect(lookupIconFromFallbackMap('Telegram Messenger')).toBe(
-    ICON_FALLBACK_MAP['telegram messenger'],
-  );
-});
-
-// ---------------------------------------------------------------------------
-// Fallback map used when App Store API returns no result
-// ---------------------------------------------------------------------------
-
-test('fetchAppIconFromAppStore falls back gracefully: caller can use lookupIconFromFallbackMap', async () => {
-  // Simulate App Store returning no matching results
-  globalThis.fetch = () => makeAppStoreResponse([]);
-
-  const appStoreResult = await fetchAppIconFromAppStore('Telegram');
-  expect(appStoreResult).toBeUndefined();
-
-  // Caller should then try the fallback map
-  const fallback = lookupIconFromFallbackMap('Telegram');
-  expect(fallback).toBe(ICON_FALLBACK_MAP['telegram']);
-});
-
-test('ICON_FALLBACK_MAP contains only http/https icon URLs', () => {
-  for (const [name, url] of Object.entries(ICON_FALLBACK_MAP)) {
-    expect(isUrl(url), `entry "${name}" should have a valid URL`).toBe(true);
-  }
+  expect(isUrl('com.tencent.xin')).toBe(false); // bundle id triggers map lookup
 });
