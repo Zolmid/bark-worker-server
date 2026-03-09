@@ -203,13 +203,9 @@ export class API {
     const subtitle = parameters.subtitle || undefined;
     const body = parameters.body || undefined;
 
-    // 当用户未手动设定 icon 时，根据 group（包名）使用预设图标
-    if (
-      !parameters.icon &&
-      parameters.group &&
-      GROUP_ICON_MAP[parameters.group]
-    ) {
-      parameters.icon = GROUP_ICON_MAP[parameters.group];
+    // 当 icon 字段传入的是已知应用包名时，替换为对应的预设图标 URL
+    if (parameters.icon && GROUP_ICON_MAP[parameters.icon]) {
+      parameters.icon = GROUP_ICON_MAP[parameters.icon];
     }
 
     let sound = parameters.sound || undefined;
