@@ -6,6 +6,47 @@ import { getTimestamp, newShortUUID } from './utils';
 /** Regions to query when searching the App Store. */
 const APPSTORE_REGIONS = ['us', 'cn', 'gb', 'jp', 'kr'];
 
+/** Debug logger for the icon resolution flow. */
+function logDebug(message: string): void {
+  console.debug(`[icon] ${message}`);
+}
+
+/** Error logger for the icon resolution flow. */
+function logError(message: string, err?: unknown): void {
+  const detail = err instanceof Error ? `: ${err.message}` : '';
+  console.error(`[icon] ${message}${detail}`);
+}
+
+/**
+ * Fallback icon mapping table.
+ * Keys are normalized app names (lowercase, whitespace-collapsed via normalizeName).
+ * Values are icon URLs (≥64×64).
+ * Used when the App Store API is unavailable or returns no confident match.
+ * Note: artwork URLs from Apple's CDN may become stale (return 404 or wrong icon)
+ * when developers update their app icons. Verify and update these entries periodically.
+ */
+export const ICON_FALLBACK_MAP: Record<string, string> = {
+  telegram:
+    'https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/47/f5/59/47f55928-a47d-f91a-df2f-03fc4b2994a7/AppIcon-0-0-1x_U007emarketing-0-7-0-85-220.png/512x512bb.jpg',
+  'telegram messenger':
+    'https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/47/f5/59/47f55928-a47d-f91a-df2f-03fc4b2994a7/AppIcon-0-0-1x_U007emarketing-0-7-0-85-220.png/512x512bb.jpg',
+  wechat:
+    'https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/32/87/01/3287015c-0af4-a2fa-bac6-63b8cef70e8f/AppIcon-0-0-1x_U007epad-0-1-0-0-85-220.png/512x512bb.jpg',
+  微信: 'https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/32/87/01/3287015c-0af4-a2fa-bac6-63b8cef70e8f/AppIcon-0-0-1x_U007epad-0-1-0-0-85-220.png/512x512bb.jpg',
+  whatsapp:
+    'https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/15/5e/da/155eda69-1c32-eb14-e7c5-a6e6efab9b65/AppIcon-0-0-1x_U007emarketing-0-0-0-10-0-0-85-220.png/512x512bb.jpg',
+  gmail:
+    'https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/c3/e5/86/c3e58621-43e9-e7fb-5c6b-6c05e9a1ea6e/AppIcon-0-0-1x_U007emarketing-0-0-0-10-0-0-85-220.png/512x512bb.jpg',
+  youtube:
+    'https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/6e/e3/15/6ee315ba-d55e-9040-9827-1e5a60a1b025/YouTubeAppIcon-0-0-1x_U007emarketing-0-10-0-85-220.png/512x512bb.jpg',
+};
+
+/** Look up an icon URL from the fallback map using the given app name. */
+export function lookupIconFromFallbackMap(appName: string): string | undefined {
+  const key = normalizeName(appName);
+  return ICON_FALLBACK_MAP[key];
+}
+
 interface AppStoreResult {
   trackId: number;
   trackName: string;
@@ -55,15 +96,34 @@ function getBestIconUrl(result: AppStoreResult): string | undefined {
 export async function fetchAppIconFromAppStore(
   appName: string,
 ): Promise<string | undefined> {
-  if (!appName.trim()) return undefined;
+  if (!appName.trim()) {
+    logDebug('skipping App Store lookup: empty app name');
+    return undefined;
+  }
+
+  logDebug(
+    `querying App Store for "${appName}" across regions: ${APPSTORE_REGIONS.join(', ')}`,
+  );
 
   const regionResults = await Promise.allSettled(
     APPSTORE_REGIONS.map(async (country) => {
       const url = `https://itunes.apple.com/search?term=${encodeURIComponent(appName)}&entity=software&country=${country}&limit=5`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-      if (!res.ok) return [] as AppStoreResult[];
-      const data = (await res.json()) as { results: AppStoreResult[] };
-      return data.results || ([] as AppStoreResult[]);
+      try {
+        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+        if (!res.ok) {
+          logDebug(
+            `App Store region "${country}": non-OK status ${res.status}`,
+          );
+          return [] as AppStoreResult[];
+        }
+        const data = (await res.json()) as { results: AppStoreResult[] };
+        const results = data.results || ([] as AppStoreResult[]);
+        logDebug(`App Store region "${country}": ${results.length} result(s)`);
+        return results;
+      } catch (err) {
+        logError(`App Store region "${country}" query failed`, err);
+        return [] as AppStoreResult[];
+      }
     }),
   );
 
@@ -77,16 +137,28 @@ export async function fetchAppIconFromAppStore(
       seen.add(result.trackId);
       const score = scoreMatch(appName, result.trackName);
       if (score > 0 && getBestIconUrl(result)) {
+        logDebug(
+          `App Store candidate "${result.trackName}" (id: ${result.trackId}) score: ${score}`,
+        );
         candidates.push({ score, result });
       }
     }
   }
 
-  if (candidates.length === 0) return undefined;
+  if (candidates.length === 0) {
+    logDebug(`App Store: no confident match found for "${appName}"`);
+    return undefined;
+  }
 
   // Sort by score descending; stable because sort order is deterministic.
   candidates.sort((a, b) => b.score - a.score);
-  return getBestIconUrl(candidates[0].result);
+  const best = candidates[0];
+  const iconUrl = getBestIconUrl(best.result);
+  if (!iconUrl) return undefined;
+  logDebug(
+    `App Store: selected "${best.result.trackName}" (score: ${best.score}) icon URL: ${iconUrl}`,
+  );
+  return iconUrl;
 }
 
 export class APIError extends Error {
@@ -274,14 +346,39 @@ export class API {
     const subtitle = parameters.subtitle || undefined;
     const body = parameters.body || undefined;
 
-    // If icon is a URL use it directly; otherwise treat it as an app name and
-    // look up the icon via the App Store API.
-    if (parameters.icon && !isUrl(parameters.icon)) {
-      const resolved = await fetchAppIconFromAppStore(parameters.icon).catch(
-        () => undefined,
-      );
-      if (resolved) {
-        parameters.icon = resolved;
+    // Resolve icon:
+    //   1. URL  → use directly.
+    //   2. App name → query App Store API.
+    //   3. App Store returns nothing → fall back to static mapping table.
+    if (parameters.icon) {
+      logDebug(`received icon value: "${parameters.icon}"`);
+      if (isUrl(parameters.icon)) {
+        logDebug('icon is a URL, using directly');
+      } else {
+        logDebug(`icon is not a URL, treating as app name`);
+        let resolved: string | undefined;
+        try {
+          resolved = await fetchAppIconFromAppStore(parameters.icon);
+        } catch (err) {
+          logError(`App Store API query failed for "${parameters.icon}"`, err);
+        }
+        if (resolved) {
+          logDebug(`icon resolved via App Store API: ${resolved}`);
+          parameters.icon = resolved;
+        } else {
+          logDebug(
+            `App Store API returned no result for "${parameters.icon}", trying fallback map`,
+          );
+          const fallback = lookupIconFromFallbackMap(parameters.icon);
+          if (fallback) {
+            logDebug(`icon resolved via fallback map: ${fallback}`);
+            parameters.icon = fallback;
+          } else {
+            logDebug(
+              `fallback map: no entry for "${parameters.icon}"; icon field kept as-is`,
+            );
+          }
+        }
       }
     }
 

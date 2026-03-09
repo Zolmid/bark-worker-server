@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, expect, test } from '@rstest/core';
-import { fetchAppIconFromAppStore, isUrl } from '../src/core/api';
+import {
+  fetchAppIconFromAppStore,
+  ICON_FALLBACK_MAP,
+  isUrl,
+  lookupIconFromFallbackMap,
+} from '../src/core/api';
 
 // ---------------------------------------------------------------------------
 // isUrl
@@ -166,4 +171,52 @@ test('fetchAppIconFromAppStore uses case-insensitive normalized match', async ()
 
   const result = await fetchAppIconFromAppStore('Telegram Messenger');
   expect(result).toBe('https://example.com/tg.png');
+});
+
+// ---------------------------------------------------------------------------
+// lookupIconFromFallbackMap
+// ---------------------------------------------------------------------------
+
+test('lookupIconFromFallbackMap returns icon URL for a known app name', () => {
+  const result = lookupIconFromFallbackMap('Telegram');
+  expect(result).toBe(ICON_FALLBACK_MAP['telegram']);
+});
+
+test('lookupIconFromFallbackMap is case-insensitive', () => {
+  expect(lookupIconFromFallbackMap('TELEGRAM')).toBe(
+    ICON_FALLBACK_MAP['telegram'],
+  );
+  expect(lookupIconFromFallbackMap('WeChat')).toBe(ICON_FALLBACK_MAP['wechat']);
+});
+
+test('lookupIconFromFallbackMap returns undefined for unknown app name', () => {
+  expect(lookupIconFromFallbackMap('SomeUnknownApp')).toBeUndefined();
+});
+
+test('lookupIconFromFallbackMap handles multi-word names with normalization', () => {
+  expect(lookupIconFromFallbackMap('Telegram Messenger')).toBe(
+    ICON_FALLBACK_MAP['telegram messenger'],
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Fallback map used when App Store API returns no result
+// ---------------------------------------------------------------------------
+
+test('fetchAppIconFromAppStore falls back gracefully: caller can use lookupIconFromFallbackMap', async () => {
+  // Simulate App Store returning no matching results
+  globalThis.fetch = () => makeAppStoreResponse([]);
+
+  const appStoreResult = await fetchAppIconFromAppStore('Telegram');
+  expect(appStoreResult).toBeUndefined();
+
+  // Caller should then try the fallback map
+  const fallback = lookupIconFromFallbackMap('Telegram');
+  expect(fallback).toBe(ICON_FALLBACK_MAP['telegram']);
+});
+
+test('ICON_FALLBACK_MAP contains only http/https icon URLs', () => {
+  for (const [name, url] of Object.entries(ICON_FALLBACK_MAP)) {
+    expect(isUrl(url), `entry "${name}" should have a valid URL`).toBe(true);
+  }
 });
