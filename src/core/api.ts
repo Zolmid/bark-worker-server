@@ -5,17 +5,17 @@ import { getTimestamp, newShortUUID } from './utils';
 
 const GROUP_ICON_MAP: Record<string, string> = {
   'com.tencent.mm':
-    'https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/77/03/42/770342c9-e498-66f4-bca5-bda0e3de0664/AppIcon-0-0-1x_U007emarketing-0-7-0-85-220.png/246x0w.webp',
+    'https://static-r2.zolmid.com/Static/APP%20LOGO/微信-iOS-512x512.png',
   'com.taobao.idlefish':
-    'https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/3f/47/5c/3f475c26-be85-990d-0fb4-8f1111054c4d/AppIcon-0-0-1x_U007emarketing-0-7-0-85-220.png/246x0w.webp',
+    'https://static-r2.zolmid.com/Static/APP%20LOGO/闲鱼%20-%20神奇的闲鱼！-iOS-512x512.png',
   'com.android.mms':
-    'https://is1-ssl.mzstatic.com/image/thumb/Purple221/v4/fa/75/10/fa751027-68cc-6d78-d462-18faa42dbd57/AppIcon-0-1x_U007emarketing-0-7-0-85-220-0.png/246x0w.webp',
+    'https://static-r2.zolmid.com/Static/APP%20LOGO/信息-iOS-512x512.png',
   'com.tencent.mobileqq':
-    'https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/ab/67/1a/ab671a27-86f5-e103-d8e1-001c55b57c4a/AppIcon-0-0-1x_U007emarketing-0-8-0-85-220.png/246x0w.webp',
+    'https://static-r2.zolmid.com/Static/APP%20LOGO/QQ-iOS-512x512.png',
   'org.telegram.messenger':
-    'https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/47/ee/9b/47ee9bb8-94fb-dbb0-eb44-fd49cbe1ff4c/AppIcon-0-0-1x_U007ephone-0-0-85-220.png/246x0w.webp',
+    'https://static-r2.zolmid.com/Static/APP%20LOGO/Telegram%20Messenger-iOS-512x512.png',
   'com.whatsapp':
-    'https://is1-ssl.mzstatic.com/image/thumb/Purple211/v4/11/a6/74/11a6745d-de38-3415-20d4-6db017942980/AppIcon-0-0-1x_U007emarketing-0-7-0-85-220.png/246x0w.webp',
+    'https://static-r2.zolmid.com/Static/APP%20LOGO/WhatsApp%20Messenger-iOS-512x512.png',
 };
 
 export class APIError extends Error {
