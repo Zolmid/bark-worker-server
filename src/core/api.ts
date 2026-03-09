@@ -3,16 +3,91 @@ import { push, regenerateAuthToken } from './apns';
 import type { DBAdapter, Options } from './type';
 import { getTimestamp, newShortUUID } from './utils';
 
-export const GROUP_ICON_MAP: Record<string, string> = {
-  微信: 'https://static-r2.zolmid.com/Static/APP%20LOGO/微信-iOS-512x512.png',
-  闲鱼: 'https://static-r2.zolmid.com/Static/APP%20LOGO/闲鱼%20-%20神奇的闲鱼！-iOS-512x512.png',
-  信息: 'https://static-r2.zolmid.com/Static/APP%20LOGO/信息-iOS-512x512.png',
-  QQ: 'https://static-r2.zolmid.com/Static/APP%20LOGO/QQ-iOS-512x512.png',
-  Telegram:
-    'https://static-r2.zolmid.com/Static/APP%20LOGO/Telegram%20Messenger-iOS-512x512.png',
-  WhatsApp:
-    'https://static-r2.zolmid.com/Static/APP%20LOGO/WhatsApp%20Messenger-iOS-512x512.png',
-};
+/** Regions to query when searching the App Store. */
+const APPSTORE_REGIONS = ['us', 'cn', 'gb', 'jp', 'kr'];
+
+interface AppStoreResult {
+  trackId: number;
+  trackName: string;
+  artworkUrl512?: string;
+  artworkUrl100?: string;
+}
+
+/** Returns true if the string is an HTTP/HTTPS URL. */
+export function isUrl(str: string): boolean {
+  try {
+    const url = new URL(str);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+/** Normalize a string for loose comparison (lowercase, collapse whitespace). */
+function normalizeName(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[\s_.,!-]+/g, ' ')
+    .trim();
+}
+
+/** Score how well a result's trackName matches the queried app name (higher = better). */
+function scoreMatch(query: string, trackName: string): number {
+  if (trackName === query) return 10;
+  const nq = normalizeName(query);
+  const nt = normalizeName(trackName);
+  if (nt === nq) return 8;
+  if (nt.startsWith(nq) || nq.startsWith(nt)) return 5;
+  return 0;
+}
+
+/** Return the best icon URL (≥64×64) from an App Store result. */
+function getBestIconUrl(result: AppStoreResult): string | undefined {
+  // artworkUrl512 (512×512) > artworkUrl100 (100×100); both satisfy ≥64×64.
+  return result.artworkUrl512 || result.artworkUrl100;
+}
+
+/**
+ * Query the iTunes Search API across multiple regions, score results by name
+ * similarity, and return the icon URL (≥64×64) of the best match.
+ * Returns undefined if no confident match is found or all requests fail.
+ */
+export async function fetchAppIconFromAppStore(
+  appName: string,
+): Promise<string | undefined> {
+  if (!appName.trim()) return undefined;
+
+  const regionResults = await Promise.allSettled(
+    APPSTORE_REGIONS.map(async (country) => {
+      const url = `https://itunes.apple.com/search?term=${encodeURIComponent(appName)}&entity=software&country=${country}&limit=5`;
+      const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) return [] as AppStoreResult[];
+      const data = (await res.json()) as { results: AppStoreResult[] };
+      return data.results || ([] as AppStoreResult[]);
+    }),
+  );
+
+  const seen = new Set<number>();
+  const candidates: { score: number; result: AppStoreResult }[] = [];
+
+  for (const r of regionResults) {
+    if (r.status !== 'fulfilled') continue;
+    for (const result of r.value) {
+      if (seen.has(result.trackId)) continue;
+      seen.add(result.trackId);
+      const score = scoreMatch(appName, result.trackName);
+      if (score > 0 && getBestIconUrl(result)) {
+        candidates.push({ score, result });
+      }
+    }
+  }
+
+  if (candidates.length === 0) return undefined;
+
+  // Sort by score descending; stable because sort order is deterministic.
+  candidates.sort((a, b) => b.score - a.score);
+  return getBestIconUrl(candidates[0].result);
+}
 
 export class APIError extends Error {
   code: number;
@@ -199,9 +274,15 @@ export class API {
     const subtitle = parameters.subtitle || undefined;
     const body = parameters.body || undefined;
 
-    // 当 icon 字段传入的是已知应用名时，替换为对应的预设图标 URL
-    if (parameters.icon && GROUP_ICON_MAP[parameters.icon]) {
-      parameters.icon = GROUP_ICON_MAP[parameters.icon];
+    // If icon is a URL use it directly; otherwise treat it as an app name and
+    // look up the icon via the App Store API.
+    if (parameters.icon && !isUrl(parameters.icon)) {
+      const resolved = await fetchAppIconFromAppStore(parameters.icon).catch(
+        () => undefined,
+      );
+      if (resolved) {
+        parameters.icon = resolved;
+      }
     }
 
     let sound = parameters.sound || undefined;

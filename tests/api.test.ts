@@ -1,33 +1,169 @@
-import { expect, test } from '@rstest/core';
-import { GROUP_ICON_MAP } from '../src/core/api';
+import { afterEach, beforeEach, expect, test } from '@rstest/core';
+import { fetchAppIconFromAppStore, isUrl } from '../src/core/api';
 
-test('GROUP_ICON_MAP uses app names as keys', () => {
-  // Keys should be app names, not package names
-  expect(Object.keys(GROUP_ICON_MAP)).toContain('微信');
-  expect(Object.keys(GROUP_ICON_MAP)).toContain('闲鱼');
-  expect(Object.keys(GROUP_ICON_MAP)).toContain('信息');
-  expect(Object.keys(GROUP_ICON_MAP)).toContain('QQ');
-  expect(Object.keys(GROUP_ICON_MAP)).toContain('Telegram');
-  expect(Object.keys(GROUP_ICON_MAP)).toContain('WhatsApp');
+// ---------------------------------------------------------------------------
+// isUrl
+// ---------------------------------------------------------------------------
+
+test('isUrl returns true for http/https URLs', () => {
+  expect(isUrl('https://example.com/icon.png')).toBe(true);
+  expect(isUrl('http://example.com/icon.png')).toBe(true);
+  expect(isUrl('https://is2.mzstatic.com/image/thumb/foo/512x512.png')).toBe(
+    true,
+  );
 });
 
-test('GROUP_ICON_MAP does not contain package names', () => {
-  expect(Object.keys(GROUP_ICON_MAP)).not.toContain('com.tencent.mm');
-  expect(Object.keys(GROUP_ICON_MAP)).not.toContain('com.taobao.idlefish');
-  expect(Object.keys(GROUP_ICON_MAP)).not.toContain('com.android.mms');
-  expect(Object.keys(GROUP_ICON_MAP)).not.toContain('com.tencent.mobileqq');
-  expect(Object.keys(GROUP_ICON_MAP)).not.toContain('org.telegram.messenger');
-  expect(Object.keys(GROUP_ICON_MAP)).not.toContain('com.whatsapp');
+test('isUrl returns false for plain app names and non-URL strings', () => {
+  expect(isUrl('微信')).toBe(false);
+  expect(isUrl('Telegram')).toBe(false);
+  expect(isUrl('WeChat')).toBe(false);
+  expect(isUrl('com.tencent.mm')).toBe(false);
+  expect(isUrl('')).toBe(false);
+  expect(isUrl('ftp://example.com')).toBe(false); // non http/https
 });
 
-test('icon auto-matching resolves app name to preset icon URL', () => {
-  expect(GROUP_ICON_MAP['微信']).toBe(
-    'https://static-r2.zolmid.com/Static/APP%20LOGO/微信-iOS-512x512.png',
+// ---------------------------------------------------------------------------
+// fetchAppIconFromAppStore – mocked fetch
+// ---------------------------------------------------------------------------
+
+const originalFetch = globalThis.fetch;
+
+beforeEach(() => {
+  // reset to real fetch before each test; individual tests override as needed
+  globalThis.fetch = originalFetch;
+});
+
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+});
+
+function makeAppStoreResponse(results: object[]) {
+  return Promise.resolve(
+    new Response(JSON.stringify({ results }), { status: 200 }),
   );
-  expect(GROUP_ICON_MAP['QQ']).toBe(
-    'https://static-r2.zolmid.com/Static/APP%20LOGO/QQ-iOS-512x512.png',
-  );
-  expect(GROUP_ICON_MAP['Telegram']).toBe(
-    'https://static-r2.zolmid.com/Static/APP%20LOGO/Telegram%20Messenger-iOS-512x512.png',
-  );
+}
+
+const MOCK_APP = {
+  trackId: 123,
+  trackName: 'Telegram Messenger',
+  artworkUrl512: 'https://example.com/telegram-512.png',
+  artworkUrl100: 'https://example.com/telegram-100.png',
+};
+
+test('icon URL is identified by isUrl and would be used directly in pushOne', () => {
+  // pushOne calls isUrl before fetchAppIconFromAppStore; if isUrl returns true
+  // the fetch helper is skipped entirely.
+  expect(isUrl('https://example.com/my-icon.png')).toBe(true);
+  expect(isUrl('Telegram')).toBe(false); // app name triggers lookup
+});
+
+test('fetchAppIconFromAppStore returns artworkUrl512 for exact match', async () => {
+  globalThis.fetch = () => makeAppStoreResponse([MOCK_APP]);
+
+  const result = await fetchAppIconFromAppStore('Telegram Messenger');
+  expect(result).toBe('https://example.com/telegram-512.png');
+});
+
+test('fetchAppIconFromAppStore returns artworkUrl100 when artworkUrl512 absent', async () => {
+  const app = { ...MOCK_APP, artworkUrl512: undefined };
+  globalThis.fetch = () => makeAppStoreResponse([app]);
+
+  const result = await fetchAppIconFromAppStore('Telegram Messenger');
+  expect(result).toBe('https://example.com/telegram-100.png');
+});
+
+test('fetchAppIconFromAppStore prefers exact name match over prefix match', async () => {
+  const exact = {
+    trackId: 1,
+    trackName: 'WeChat',
+    artworkUrl512: 'https://example.com/wechat-exact.png',
+  };
+  const prefix = {
+    trackId: 2,
+    trackName: 'WeChat Mini Programs',
+    artworkUrl512: 'https://example.com/wechat-prefix.png',
+  };
+  // Return prefix match first to test sorting
+  globalThis.fetch = () => makeAppStoreResponse([prefix, exact]);
+
+  const result = await fetchAppIconFromAppStore('WeChat');
+  expect(result).toBe('https://example.com/wechat-exact.png');
+});
+
+test('fetchAppIconFromAppStore deduplicates results across regions', async () => {
+  let callCount = 0;
+  globalThis.fetch = () => {
+    callCount++;
+    return makeAppStoreResponse([MOCK_APP]); // same trackId every region
+  };
+
+  const result = await fetchAppIconFromAppStore('Telegram Messenger');
+  // All 5 regions queried
+  expect(callCount).toBe(5);
+  // But only one unique candidate (deduped by trackId)
+  expect(result).toBe('https://example.com/telegram-512.png');
+});
+
+test('fetchAppIconFromAppStore returns undefined when no results match', async () => {
+  globalThis.fetch = () =>
+    makeAppStoreResponse([
+      {
+        trackId: 99,
+        trackName: 'SomeOtherApp',
+        artworkUrl512: 'https://example.com/other.png',
+      },
+    ]);
+
+  const result = await fetchAppIconFromAppStore('WeChat');
+  expect(result).toBeUndefined();
+});
+
+test('fetchAppIconFromAppStore returns undefined when all regions fail', async () => {
+  globalThis.fetch = () => Promise.reject(new Error('network error'));
+
+  const result = await fetchAppIconFromAppStore('WeChat');
+  expect(result).toBeUndefined();
+});
+
+test('fetchAppIconFromAppStore returns undefined when API returns non-ok status', async () => {
+  globalThis.fetch = () =>
+    Promise.resolve(new Response('Server Error', { status: 500 }));
+
+  const result = await fetchAppIconFromAppStore('WeChat');
+  expect(result).toBeUndefined();
+});
+
+test('fetchAppIconFromAppStore handles mixed region success and failure', async () => {
+  let calls = 0;
+  globalThis.fetch = () => {
+    calls++;
+    if (calls <= 2) return Promise.reject(new Error('timeout'));
+    return makeAppStoreResponse([MOCK_APP]);
+  };
+
+  const result = await fetchAppIconFromAppStore('Telegram Messenger');
+  expect(result).toBe('https://example.com/telegram-512.png');
+});
+
+test('fetchAppIconFromAppStore returns undefined for empty app name', async () => {
+  let called = false;
+  globalThis.fetch = () => {
+    called = true;
+    return makeAppStoreResponse([]);
+  };
+  const result = await fetchAppIconFromAppStore('  ');
+  expect(result).toBeUndefined();
+  expect(called).toBe(false); // no network call made
+});
+
+test('fetchAppIconFromAppStore uses case-insensitive normalized match', async () => {
+  const app = {
+    trackId: 42,
+    trackName: 'telegram messenger',
+    artworkUrl512: 'https://example.com/tg.png',
+  };
+  globalThis.fetch = () => makeAppStoreResponse([app]);
+
+  const result = await fetchAppIconFromAppStore('Telegram Messenger');
+  expect(result).toBe('https://example.com/tg.png');
 });
