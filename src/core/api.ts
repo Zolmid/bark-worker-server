@@ -1,29 +1,8 @@
 import type { Context } from 'hono';
 import { push, regenerateAuthToken } from './apns';
-import { lookupIconFromFallbackMap, normalizeName } from './icon-fallback-map';
+import { lookupIcon } from './icon-map';
 import type { DBAdapter, Options } from './type';
 import { getTimestamp, newShortUUID } from './utils';
-
-/** Regions to query when searching the App Store. */
-const APPSTORE_REGIONS = ['us', 'cn', 'gb', 'jp', 'kr'];
-
-/** Debug logger for the icon resolution flow. */
-function logDebug(message: string): void {
-  console.debug(`[icon] ${message}`);
-}
-
-/** Error logger for the icon resolution flow. */
-function logError(message: string, err?: unknown): void {
-  const detail = err instanceof Error ? `: ${err.message}` : '';
-  console.error(`[icon] ${message}${detail}`);
-}
-
-interface AppStoreResult {
-  trackId: number;
-  trackName: string;
-  artworkUrl512?: string;
-  artworkUrl100?: string;
-}
 
 /** Returns true if the string is an HTTP/HTTPS URL. */
 export function isUrl(str: string): boolean {
@@ -33,95 +12,6 @@ export function isUrl(str: string): boolean {
   } catch {
     return false;
   }
-}
-
-/** Score how well a result's trackName matches the queried app name (higher = better). */
-function scoreMatch(query: string, trackName: string): number {
-  if (trackName === query) return 10;
-  const nq = normalizeName(query);
-  const nt = normalizeName(trackName);
-  if (nt === nq) return 8;
-  if (nt.startsWith(nq) || nq.startsWith(nt)) return 5;
-  return 0;
-}
-
-/** Return the best icon URL (≥64×64) from an App Store result. */
-function getBestIconUrl(result: AppStoreResult): string | undefined {
-  // artworkUrl512 (512×512) > artworkUrl100 (100×100); both satisfy ≥64×64.
-  return result.artworkUrl512 || result.artworkUrl100;
-}
-
-/**
- * Query the iTunes Search API across multiple regions, score results by name
- * similarity, and return the icon URL (≥64×64) of the best match.
- * Returns undefined if no confident match is found or all requests fail.
- */
-export async function fetchAppIconFromAppStore(
-  appName: string,
-): Promise<string | undefined> {
-  if (!appName.trim()) {
-    logDebug('skipping App Store lookup: empty app name');
-    return undefined;
-  }
-
-  logDebug(
-    `querying App Store for "${appName}" across regions: ${APPSTORE_REGIONS.join(', ')}`,
-  );
-
-  const regionResults = await Promise.allSettled(
-    APPSTORE_REGIONS.map(async (country) => {
-      const url = `https://itunes.apple.com/search?term=${encodeURIComponent(appName)}&entity=software&country=${country}&limit=5`;
-      try {
-        const res = await fetch(url, { signal: AbortSignal.timeout(5000) });
-        if (!res.ok) {
-          logDebug(
-            `App Store region "${country}": non-OK status ${res.status}`,
-          );
-          return [] as AppStoreResult[];
-        }
-        const data = (await res.json()) as { results: AppStoreResult[] };
-        const results = data.results || ([] as AppStoreResult[]);
-        logDebug(`App Store region "${country}": ${results.length} result(s)`);
-        return results;
-      } catch (err) {
-        logError(`App Store region "${country}" query failed`, err);
-        return [] as AppStoreResult[];
-      }
-    }),
-  );
-
-  const seen = new Set<number>();
-  const candidates: { score: number; result: AppStoreResult }[] = [];
-
-  for (const r of regionResults) {
-    if (r.status !== 'fulfilled') continue;
-    for (const result of r.value) {
-      if (seen.has(result.trackId)) continue;
-      seen.add(result.trackId);
-      const score = scoreMatch(appName, result.trackName);
-      if (score > 0 && getBestIconUrl(result)) {
-        logDebug(
-          `App Store candidate "${result.trackName}" (id: ${result.trackId}) score: ${score}`,
-        );
-        candidates.push({ score, result });
-      }
-    }
-  }
-
-  if (candidates.length === 0) {
-    logDebug(`App Store: no confident match found for "${appName}"`);
-    return undefined;
-  }
-
-  // Sort by score descending; stable because sort order is deterministic.
-  candidates.sort((a, b) => b.score - a.score);
-  const best = candidates[0];
-  const iconUrl = getBestIconUrl(best.result);
-  if (!iconUrl) return undefined;
-  logDebug(
-    `App Store: selected "${best.result.trackName}" (score: ${best.score}) icon URL: ${iconUrl}`,
-  );
-  return iconUrl;
 }
 
 export class APIError extends Error {
@@ -311,36 +201,13 @@ export class API {
 
     // Resolve icon:
     //   1. URL  → use directly.
-    //   2. App name → query App Store API.
-    //   3. App Store returns nothing → fall back to static mapping table.
+    //   2. Bundle identifier → look up in ICON_MAP.
+    //   3. No match → keep icon field as-is.
     if (parameters.icon) {
-      logDebug(`received icon value: "${parameters.icon}"`);
-      if (isUrl(parameters.icon)) {
-        logDebug('icon is a URL, using directly');
-      } else {
-        logDebug(`icon is not a URL, treating as app name`);
-        let resolved: string | undefined;
-        try {
-          resolved = await fetchAppIconFromAppStore(parameters.icon);
-        } catch (err) {
-          logError(`App Store API query failed for "${parameters.icon}"`, err);
-        }
-        if (resolved) {
-          logDebug(`icon resolved via App Store API: ${resolved}`);
-          parameters.icon = resolved;
-        } else {
-          logDebug(
-            `App Store API returned no result for "${parameters.icon}", trying fallback map`,
-          );
-          const fallback = lookupIconFromFallbackMap(parameters.icon);
-          if (fallback) {
-            logDebug(`icon resolved via fallback map: ${fallback}`);
-            parameters.icon = fallback;
-          } else {
-            logDebug(
-              `fallback map: no entry for "${parameters.icon}"; icon field kept as-is`,
-            );
-          }
+      if (!isUrl(parameters.icon)) {
+        const mapped = lookupIcon(parameters.icon);
+        if (mapped) {
+          parameters.icon = mapped;
         }
       }
     }
