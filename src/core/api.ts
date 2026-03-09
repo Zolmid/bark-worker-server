@@ -3,18 +3,14 @@ import { push, regenerateAuthToken } from './apns';
 import type { DBAdapter, Options } from './type';
 import { getTimestamp, newShortUUID } from './utils';
 
-const GROUP_ICON_MAP: Record<string, string> = {
-  'com.tencent.mm':
-    'https://static-r2.zolmid.com/Static/APP%20LOGO/微信-iOS-512x512.png',
-  'com.taobao.idlefish':
-    'https://static-r2.zolmid.com/Static/APP%20LOGO/闲鱼%20-%20神奇的闲鱼！-iOS-512x512.png',
-  'com.android.mms':
-    'https://static-r2.zolmid.com/Static/APP%20LOGO/信息-iOS-512x512.png',
-  'com.tencent.mobileqq':
-    'https://static-r2.zolmid.com/Static/APP%20LOGO/QQ-iOS-512x512.png',
-  'org.telegram.messenger':
+export const GROUP_ICON_MAP: Record<string, string> = {
+  微信: 'https://static-r2.zolmid.com/Static/APP%20LOGO/微信-iOS-512x512.png',
+  闲鱼: 'https://static-r2.zolmid.com/Static/APP%20LOGO/闲鱼%20-%20神奇的闲鱼！-iOS-512x512.png',
+  信息: 'https://static-r2.zolmid.com/Static/APP%20LOGO/信息-iOS-512x512.png',
+  QQ: 'https://static-r2.zolmid.com/Static/APP%20LOGO/QQ-iOS-512x512.png',
+  Telegram:
     'https://static-r2.zolmid.com/Static/APP%20LOGO/Telegram%20Messenger-iOS-512x512.png',
-  'com.whatsapp':
+  WhatsApp:
     'https://static-r2.zolmid.com/Static/APP%20LOGO/WhatsApp%20Messenger-iOS-512x512.png',
 };
 
@@ -203,7 +199,7 @@ export class API {
     const subtitle = parameters.subtitle || undefined;
     const body = parameters.body || undefined;
 
-    // 当 icon 字段传入的是已知应用包名时，替换为对应的预设图标 URL
+    // 当 icon 字段传入的是已知应用名时，替换为对应的预设图标 URL
     if (parameters.icon && GROUP_ICON_MAP[parameters.icon]) {
       parameters.icon = GROUP_ICON_MAP[parameters.icon];
     }
