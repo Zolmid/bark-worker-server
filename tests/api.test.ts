@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, expect, test } from '@rstest/core';
+import { fetchAppIconFromAppStore, isUrl } from '../src/core/api';
 import {
-  fetchAppIconFromAppStore,
   ICON_FALLBACK_MAP,
-  isUrl,
   lookupIconFromFallbackMap,
-} from '../src/core/api';
+} from '../src/core/icon-fallback-map';
 
 // ---------------------------------------------------------------------------
 // isUrl
